@@ -21,5 +21,7 @@ Supported output types:
 pip install web3
 
 ## Usage
-python thc_metadata.py <tokenId> [--type traits|json|blob]
+python thc_metadata.py tokenId [--type traits|json|blob]
+
+ie: python thc_metadata.py 157 --type json
 

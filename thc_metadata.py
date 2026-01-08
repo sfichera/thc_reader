@@ -30,6 +30,10 @@ CONTRACT_ADDRESS = os.getenv(
     "0xCC3D60fF11a268606C6a57bD6Db74b4208f1D30c",
 )
 
+# Token supply bounds
+MIN_TOKEN_ID = 1
+MAX_TOKEN_ID = 2222
+
 # Minimal ABI:
 # - tokenTraits(uint256) -> (background, fur, eyes, hat, special)
 # - buildSVG(uint256) -> string
@@ -102,7 +106,6 @@ def as_int(v: Any) -> int:
 
 
 def b64_str(s: str) -> str:
-    # Solidity Base64.encode(bytes(...)) is standard base64 with padding.
     return base64.b64encode(s.encode("utf-8")).decode("ascii")
 
 
@@ -120,7 +123,6 @@ def build_attributes(token_id: int, traits_tuple: Any) -> List[Dict[str, str]]:
 def parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="thc_metadata.py",
-        add_help=True,
         formatter_class=argparse.RawTextHelpFormatter,
         description=(
             "Tiny Hyper Cat metadata helper.\n"
@@ -139,9 +141,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
             "  blob   - data:application/json;base64,<base64(json)>"
         ),
     )
-    args = p.parse_args(argv)
-
-    return args
+    return p.parse_args(argv)
 
 
 def ensure_stdout_newline(s: str) -> None:
@@ -154,20 +154,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
     token_id = args.tokenId
-    if token_id < 0:
-        print("Invalid tokenId: tokenId must be >= 0", file=sys.stderr)
+
+    # ✅ HARD VALIDATION: tokenId range
+    if token_id < MIN_TOKEN_ID or token_id > MAX_TOKEN_ID:
+        print(
+            f"ERROR: tokenId out of range. Valid range is "
+            f"{MIN_TOKEN_ID}–{MAX_TOKEN_ID}. Received: {token_id}",
+            file=sys.stderr,
+        )
         return 2
 
     if not Web3.is_address(CONTRACT_ADDRESS):
         print(
-            "ERROR: CONTRACT_ADDRESS inválido. Setea env CONTRACT_ADDRESS o edita el script.",
+            "ERROR: Invalid CONTRACT_ADDRESS. Set env CONTRACT_ADDRESS or edit the script.",
             file=sys.stderr,
         )
         return 2
 
     w3 = Web3(Web3.HTTPProvider(RPC_URL, request_kwargs={"timeout": 30}))
     if not w3.is_connected():
-        print(f"ERROR: No pude conectar al RPC: {RPC_URL}", file=sys.stderr)
+        print(f"ERROR: Could not connect to RPC: {RPC_URL}", file=sys.stderr)
         return 1
 
     contract = w3.eth.contract(
@@ -175,32 +181,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         abi=ABI,
     )
 
-    # read traits (cheap)
+    # Read traits (cheap call)
     try:
         traits_tuple = contract.functions.tokenTraits(token_id).call()
     except Exception as e:
-        print(f"ERROR: tokenTraits({token_id}) call falló: {e}", file=sys.stderr)
+        print(f"ERROR: tokenTraits({token_id}) call failed: {e}", file=sys.stderr)
         return 1
 
     attributes = build_attributes(token_id, traits_tuple)
 
     # traits-only mode (default)
     if args.type == "traits":
-        traits_json: Dict[str, Any] = {
-            "tokenId": token_id,
-            "attributes": attributes,
-        }
-        ensure_stdout_newline(json.dumps(traits_json, indent=2, ensure_ascii=False))
+        ensure_stdout_newline(json.dumps(
+            {"tokenId": token_id, "attributes": attributes},
+            indent=2,
+            ensure_ascii=False
+        ))
         return 0
 
     # For json/blob we need SVG
     try:
         svg = contract.functions.buildSVG(token_id).call()
     except Exception as e:
-        print(f"ERROR: buildSVG({token_id}) call falló: {e}", file=sys.stderr)
+        print(f"ERROR: buildSVG({token_id}) call failed: {e}", file=sys.stderr)
         return 1
 
-    # base64 encode SVG (kept as-is, matches solidity-style image field)
     base64_image = b64_str(svg)
 
     meta_obj: Dict[str, Any] = {
@@ -210,16 +215,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "image": f"data:image/svg+xml;base64,{base64_image}",
     }
 
-    # --type json: raw JSON, no base64 wrapper
     if args.type == "json":
         ensure_stdout_newline(json.dumps(meta_obj, indent=2, ensure_ascii=False))
         return 0
 
-    # --type blob: base64-wrap the full JSON
+    # blob
     meta_json_str = json.dumps(meta_obj, ensure_ascii=False, separators=(",", ":"))
     base64_json = base64.b64encode(meta_json_str.encode("utf-8")).decode("ascii")
-    token_uri_like = f"data:application/json;base64,{base64_json}"
-    ensure_stdout_newline(token_uri_like)
+    ensure_stdout_newline(f"data:application/json;base64,{base64_json}")
     return 0
 
 
